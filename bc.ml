@@ -18,15 +18,15 @@ type statement =
   | While of expr*statement list
   | For of statement*expr*statement*statement list
   | FctDef of string * string list * statement list 
-  | Return of expr
   | Break
   | Continue
+  | Return of expr
 
-(*type stateTypes =*)
-  (*| Normal of statement*)
-  (*| Break*)
-  (*| Continue*)
-  (*| Return of expr*)
+type stmntType =
+  | Normal
+  | Break
+  | Continue
+  | Return
 
 type block =
   statement list
@@ -162,7 +162,7 @@ let rec evalExpr (_e: expr) (_q:envQueue): float  =
       fctCall (fnScope @ _q) (def))
   | _ -> 0.0
 
-and evalStatement (q: envQueue) (s: statement) : envQueue = 
+and evalStatement (q: envQueue) (s: statement) : envQueue*stmntType = 
   match s with 
   | Expr(e) -> (
       match e with
@@ -175,16 +175,24 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
           let decremented = 
             (evalExpr (Var(id))  q) +. 1.
           in
-          evalStatement (q) (Assign (id, Num(decremented)))
-      | expr -> printf "%F\n" (evalExpr (expr) (q)); q
+          (evalStatement (q) (Assign (id, Num(decremented))))
+      | expr -> printf "%F\n" (evalExpr (expr) (q)); q, Normal
   )
   | Assign(v, e) ->
       let value = 
         evalExpr e q 
       in
       (match q with
-      | local::prgm -> bind(V(v, value)) (local)::prgm
-      | [] -> bind(V(v, value)) ([])::[])
+      | local::prgm -> 
+          let boundScope:scope = 
+            bind (V (v, value)) (local)
+          in
+          (boundScope::prgm), Normal
+      | [] -> 
+          let boundScope = 
+            bind (V(v, value)) ([])::[]
+          in
+          ([boundScope]), Normal)
   | FctDef(id, params, def) -> 
       (match q with
       | local::prgm -> bind(F(id, params, def)) (local)::prgm
@@ -205,15 +213,18 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
       in 
       loop (q) (cond)
   | For(init, cond, update, block) ->
-      let initScope =  
+      let initScope,_ =  
         evalStatement (q) (init) 
       in
       let rec loop (queue: envQueue) (cond: expr) =
         if(evalExpr(cond) (queue) > 0.0)
           then let newQueue = 
-            (List.fold_left ~f:(evalStatement) ~init:(queue) (block))
+            List.fold_left 
+              ~f:(fun a s -> match evalStatement a s with | (q, _) -> q) 
+              ~init:(queue) 
+              (initScope)
           in 
-          let evalUpdate =
+          let evalUpdate, _ =
             evalStatement (newQueue) (update)
           in
           loop (evalUpdate) (cond)
@@ -221,13 +232,16 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
           queue
       in
       loop (initScope) (cond)
-  | _ -> q
+  | _ -> q, Normal
 
 let evalCode (stmntList: block) (q: envQueue): unit = 
   let s: scope = 
     [] 
   in let _ = 
-    List.fold_left ~f:(evalStatement) ~init:(s::q) (stmntList)
+    List.fold_left 
+      ~f:(fun a s -> match evalStatement a s with | (q, _) -> q) 
+      ~init:(s::q) 
+      (stmntList)
   in ()
 
 (* EXPRESSION TESTS *)
@@ -366,5 +380,3 @@ let%expect_test "p4" =
   [%expect {|
   2.
   |}]
-
-
