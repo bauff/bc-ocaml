@@ -142,7 +142,6 @@ let rec evalExpr (_e: expr) (_q:envQueue): float  =
   | Op2(op, a, b) when op = "=="-> if(evalExpr a _q = evalExpr b _q)  then 1.0 else 0.0
   (*Function call*)
   | Fct(id, args) -> (
-    (printf "calling fn!");
       let (params, def) = 
         fctEval(id) (_q) 
       in
@@ -192,10 +191,8 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
       | [] -> bind(F(id, params, def)) ([])::[])
   | If(cond, codeT, codeF) ->
       if(evalExpr(cond) (q) > 0.0) 
-        then ((printf "Eval TRUE");  (List.fold_left ~f:(evalStatement)
-        ~init:(q) (codeT)))
-        else ((printf "Eval FALSE"); (List.fold_left ~f:(evalStatement)
-        ~init:(q) (codeF)))
+        then (List.fold_left ~f:(evalStatement) ~init:(q) (codeT))
+        else (List.fold_left ~f:(evalStatement) ~init:(q) (codeF))
   | While(cond, block) ->
       let rec loop (queue:envQueue) (cond:expr) =
         if(evalExpr(cond) (queue) > 0.0)
