@@ -447,8 +447,50 @@ let p7: block = [
 ]
 
 let%expect_test "p7" =
-  evalCode p6 [];
+  evalCode p7 [];
   [%expect {|
   1.
   |}]
 
+let p8: block = [
+    FctDef("f", ["x"], [
+      If(
+        (*cond*) Op2("==", Var("x"), Num(10.0)), 
+        (*then*)[Return(Num(1.0))],
+        (*else*)[While(Op2(">", Num(2.0), Num(1.0)),
+          If(
+            Op2(">", Var("x"), Num(10.0)),
+            [Break;]
+          )
+          Assign("x", Op2("+", Var("x"), Num(1.0))),
+          If(
+            Op2("<=", Var("x"), Num(10.0)),
+            [Continue;]
+          )
+        )
+        ]
+      );
+      Expr(Var("x"))
+])
+      
+(*f(x):
+if x==10, return 1.0;
+else {
+  while (true) {
+    if(x > 10) {
+      break;
+    }
+    x++;
+    if (x < 10) {
+      continue;
+    }
+  }
+  return x;
+} *)
+
+
+let%expect_test "p8" =
+  evalCode p8 [5.0];
+  [%expect {|
+  10.0
+  |}]
