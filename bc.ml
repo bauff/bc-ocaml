@@ -140,6 +140,7 @@ let rec evalExpr (_e: expr) (_q:envQueue): float  =
   | Op2(op, a, b) when op = ">="-> if(evalExpr a _q >= evalExpr b _q) then 1.0 else 0.0
   | Op2(op, a, b) when op = "<="-> if(evalExpr a _q <= evalExpr b _q) then 1.0 else 0.0
   | Op2(op, a, b) when op = "=="-> if(evalExpr a _q = evalExpr b _q)  then 1.0 else 0.0
+
   (*Function call*)
   | Fct(id, args) -> (
       let (params, def) = 
