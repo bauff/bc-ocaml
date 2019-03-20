@@ -22,11 +22,6 @@ type statement =
   | Break
   | Continue
 
-(*type stateTypes =*)
-  (*| Normal of statement*)
-  (*| Break*)
-  (*| Continue*)
-  (*| Return of expr*)
 
 type block =
   statement list
@@ -41,6 +36,13 @@ let rec print_block = function
   | FctDef(_,_,_)::l -> printf "FctDef"; print_block l
   | Return(_)::l -> printf "Return"; print_block l
   | _::l -> printf "Special"; print_block l
+
+let print_expr = function
+  | Num _ -> printf "Eval Num"
+  | Var _ -> printf "Eval Var"
+  | Op1 (_, _) -> printf "Eval Op1"
+  | Op2 (_,_,_) -> printf "Eval Op2"
+  | Fct (_,_) -> printf "Eval Fct"
 
 type env =
   | N of float
@@ -59,6 +61,11 @@ let rec print_scope = function
 
 type envQueue =
   scope list
+
+(* Special statements! *)
+exception ReturnExn of (expr*envQueue)
+exception ContinueExn of (envQueue)
+exception BreakExn of (envQueue)
 
 let print_prgrm (q:envQueue) = 
   let rec loop i = function
@@ -142,26 +149,31 @@ let rec evalExpr (_e: expr) (_q:envQueue): float  =
   | Op2(op, a, b) when op = "=="-> if(evalExpr a _q = evalExpr b _q)  then 1.0 else 0.0
   (*Function call*)
   | Fct(id, args) -> (
+      (*Find fn signature from memory*)
       let (params, def) = 
         fctEval(id) (_q) 
       in
+      (*Create a statement list of assignments, assigning *)
       let argAssign = 
         List.map2 ~f:(fun param arg -> 
           Assign(param,arg))(params)(args) 
       in 
+      (* Create a new scope, append it to the current env*)
       let fnScope = match argAssign with
-        | Ok(a)-> (List.fold_left ~f:(evalStatement) ~init:([]) (a))
+        | Ok(a)-> (List.fold_left ~f:(evalStatement) ~init:([]::_q) (a))
         | Unequal_lengths -> [] (*raise error!*)
       in
       let rec fctCall (queue: envQueue) (stmntList: statement list): float=
         match stmntList with
         | [] -> 0.0
-        | Return(e)::_ -> evalExpr (e) (queue)
+        (*| Return(e)::_ -> evalExpr (e) (queue)*)
         | stmnt::tl -> fctCall (evalStatement (queue)(stmnt)) (tl)
       in
-      fctCall (fnScope @ _q) (def))
+      try 
+        fctCall (fnScope) (def) 
+      with
+        ReturnExn(e, q) -> evalExpr e q)
   | _ -> 0.0
-
 and evalStatement (q: envQueue) (s: statement) : envQueue = 
   match s with 
   | Expr(e) -> (
@@ -193,25 +205,28 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
       if(evalExpr(cond) (q) > 0.0) 
         then (List.fold_left ~f:(evalStatement) ~init:(q) (codeT))
         else (List.fold_left ~f:(evalStatement) ~init:(q) (codeF))
-  | While(cond, block) ->
+  | While(cond, block) -> (
       let rec loop (queue:envQueue) (cond:expr) =
         if(evalExpr(cond) (queue) > 0.0)
           then let newQueue = 
-            (List.fold_left ~f:(evalStatement) ~init:(queue) (block))
+            try (List.fold_left ~f:(evalStatement) ~init:(queue) (block))
+            with ContinueExn q -> q
           in 
           loop newQueue cond
         else 
           queue
       in 
-      loop (q) (cond)
-  | For(init, cond, update, block) ->
+      try loop (q) (cond)
+      with BreakExn q -> q)
+  | For(init, cond, update, block) -> (
       let initScope =  
         evalStatement (q) (init) 
       in
       let rec loop (queue: envQueue) (cond: expr) =
         if(evalExpr(cond) (queue) > 0.0)
           then let newQueue = 
-            (List.fold_left ~f:(evalStatement) ~init:(queue) (block))
+            try (List.fold_left ~f:(evalStatement) ~init:(queue) (block))
+            with ContinueExn q -> q
           in 
           let evalUpdate =
             evalStatement (newQueue) (update)
@@ -220,8 +235,11 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
         else 
           queue
       in
-      loop (initScope) (cond)
-  | _ -> q
+      try loop (initScope) (cond)
+      with BreakExn q -> q)
+  | Return(e) -> (raise (ReturnExn (e, q))); q
+  | Break -> (raise (BreakExn (q))); q
+  | Continue -> (raise (ContinueExn (q))); q
 
 let evalCode (stmntList: block) (q: envQueue): unit = 
   let s: scope = 
@@ -337,9 +355,9 @@ let p3: block =
    FctDef("f", ["x"], [
      If( Op2("<", Var("x"), Num(2.0)), 
       (*then*) 
-      [Return(Num(1.0))],
+        [Return(Num(1.0))],
       (*else*) 
-      [Return(Op2("+",Fct("f", [Op2("-", Var("x"), Num(1.0))]), Fct("f", [Op2("-", Var("x"), Num(2.0))])))]
+        [Return(Op2("+",Fct("f", [Op2("-", Var("x"), Num(1.0))]), Fct("f", [Op2("-", Var("x"), Num(2.0))])))]
     )
    ]);
  Expr(Fct("f", [Num(3.0)]));
@@ -367,4 +385,70 @@ let%expect_test "p4" =
   2.
   |}]
 
+let p5: block =
+ [
+   FctDef("f", ["x"], [ 
+     Return(Num(3.0))
+   ]);
+   Expr(Op2("-", Fct("f", []), Num(1.)));
+]
+
+let%expect_test "p5" =
+  evalCode p5 [];
+  [%expect {|
+  2.
+  |}]
+
+(* BREAK TEST: 
+ * The following test will enter the for loop and 
+ * execute v = v * i once and break *)
+let p6: block = [
+    Assign("v", Num(1.0));
+    If(
+      (*cond*) Op2(">", Var("v"), Num(10.0)), 
+      (*then*) [Assign("v", Op2("+", Var("v"), Num(1.0)))], 
+      (*else*) [For(
+            (*init*)   Assign("i", Num(2.0)),
+            (*cond*)   Op2("<", Var("i"), Num(10.0)),
+            (*update*) Expr(Op1("++a", Var("i"))),
+            [
+              Assign("v", Op2("*", Var("v"), Var("i")));
+              Break;
+            ])]
+    );
+    Expr(Var("v"))
+]
+
+let%expect_test "p6" =
+  evalCode p6 [];
+  [%expect {|
+  2.
+  |}]
+
+(* CONTINUE TEST: 
+ * The following test will enter the for loop and 
+ * skip v = v * i until the loop ends, leaving v unchanged *)
+
+let p7: block = [
+    Assign("v", Num(1.0));
+    If(
+      (*cond*) Op2(">", Var("v"), Num(10.0)), 
+      (*then*) [Assign("v", Op2("+", Var("v"), Num(1.0)))], 
+      (*else*) [For(
+            (*init*)   Assign("i", Num(2.0)),
+            (*cond*)   Op2("<", Var("i"), Num(10.0)),
+            (*update*) Expr(Op1("++a", Var("i"))),
+            [
+              Continue;
+              Assign("v", Op2("*", Var("v"), Var("i")));
+            ])]
+    );
+    Expr(Var("v"))
+]
+
+let%expect_test "p7" =
+  evalCode p6 [];
+  [%expect {|
+  1.
+  |}]
 
