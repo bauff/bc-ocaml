@@ -1,5 +1,7 @@
 open Core
 
+(*--- Types ---*)
+
 type sExpr =
   | Atom of string
   | List of sExpr list
@@ -22,9 +24,30 @@ type statement =
   | Break
   | Continue
 
-
 type block =
   statement list
+
+(*--- environment ---*)
+
+type env =
+  | N of float
+  | V of string * float
+  | F of string * string list * statement list
+
+type scope =
+  env list
+
+type envQueue =
+  scope list
+
+(*--- special statements ---*)
+
+exception ReturnExn of (expr*envQueue)
+exception ContinueExn of (envQueue)
+exception BreakExn of (envQueue)
+
+
+(*--- helper functions: printing ---*)
 
 let rec print_block = function
   | [] -> printf "\n"
@@ -44,29 +67,12 @@ let print_expr = function
   | Op2 (_,_,_) -> printf "Eval Op2"
   | Fct (_,_) -> printf "Eval Fct"
 
-type env =
-  | N of float
-  | V of string * float
-  | F of string * string list * statement list
-
-type scope =
-  env list
-
 let rec print_scope = function 
   [] -> print_endline ""
   | N(ret)::l -> printf "RETURN = %F " ret ; print_scope l
   | V(id, value)::l -> printf "var %S = %F " id value ; print_scope l
   | F(id, _, _)::l -> printf "fun %S " id ; print_scope l
   
-
-type envQueue =
-  scope list
-
-(* Special statements! *)
-exception ReturnExn of (expr*envQueue)
-exception ContinueExn of (envQueue)
-exception BreakExn of (envQueue)
-
 let print_prgrm (q:envQueue) = 
   let rec loop i = function
     [] -> ()
@@ -74,9 +80,12 @@ let print_prgrm (q:envQueue) =
   in 
   loop 0 q
 
+
+  (*-- helper functions: environment --*)
+
 let rec varEval (_v: string) (_q:envQueue): float =
   match _q with
-  | [] -> 0.0 (*Doesn't exist NEEDS TESTS*)
+  | [] -> 0.0
   | crntScope::prgrm -> 
       let var = 
         List.find crntScope ~f:(fun s -> match s with V(v, _) when v = _v -> true | _->false ) 
@@ -87,7 +96,7 @@ let rec varEval (_v: string) (_q:envQueue): float =
 
 let rec fctEval (_id: string) (_q: envQueue): (string list)*(statement list) =
   match _q with
-  | [] -> ([],[]) (*Doesn't exist NEEDS TESTS*)
+  | [] -> ([],[])
   | crntScope::prgrm -> 
       let var = 
         List.find (crntScope) 
@@ -107,7 +116,7 @@ let bind (e:env) (s:scope): scope =
           | V(_id,_) when _id = id -> true 
           | _ -> false) 
       with
-      | Some(index, _) -> (*printf "Mutating %S = %F @ %i" id value index*)
+      | Some(index, _) ->
           List.mapi (s) 
             ~f:(fun i a -> if i = index then var else a)
       | None -> var::s)
@@ -147,6 +156,7 @@ let rec evalExpr (_e: expr) (_q:envQueue): float  =
   | Op2(op, a, b) when op = ">="-> if(evalExpr a _q >= evalExpr b _q) then 1.0 else 0.0
   | Op2(op, a, b) when op = "<="-> if(evalExpr a _q <= evalExpr b _q) then 1.0 else 0.0
   | Op2(op, a, b) when op = "=="-> if(evalExpr a _q = evalExpr b _q)  then 1.0 else 0.0
+
   (*Function call*)
   | Fct(id, args) -> (
       (*Find fn signature from memory*)
@@ -166,7 +176,6 @@ let rec evalExpr (_e: expr) (_q:envQueue): float  =
       let rec fctCall (queue: envQueue) (stmntList: statement list): float=
         match stmntList with
         | [] -> 0.0
-        (*| Return(e)::_ -> evalExpr (e) (queue)*)
         | stmnt::tl -> fctCall (evalStatement (queue)(stmnt)) (tl)
       in
       try 
@@ -241,6 +250,8 @@ and evalStatement (q: envQueue) (s: statement) : envQueue =
   | Break -> (raise (BreakExn (q))); q
   | Continue -> (raise (ContinueExn (q))); q
 
+(*--- main ---*)
+
 let evalCode (stmntList: block) (q: envQueue): unit = 
   let s: scope = 
     [] 
@@ -248,25 +259,34 @@ let evalCode (stmntList: block) (q: envQueue): unit =
     List.fold_left ~f:(evalStatement) ~init:(s::q) (stmntList)
   in ()
 
-(* EXPRESSION TESTS *)
+let runCode (code: block): unit = evalCode (code) ([])
+
+
+(*--- TESTS ---*)
+(*--- expr tests ---*)
+
 let%expect_test "evalNum" = 
   evalExpr (Num 10.0) ([])
   |> printf "%F";
   [%expect {| 10. |}]
+
 let%expect_test "eval var" = 
   evalExpr (Var "var0") [[V("var0", 10.0)]; [V("var1", -10.0); F("dontcall", [],[])]]
   |> printf "%F"; 
   [%expect {| 10. |}]
+
 let%expect_test "eval binary" = 
   evalExpr (Op2 ("+", Num(9.0), Num(1.0))) ([])
   |> printf "%F";
   [%expect {| 10. |}]
+
 let%expect_test "eval fct" = 
   evalExpr 
     (Fct ("callme", [])) 
     [[V("var0", 10.0)]; [V("var1", -10.0); F("callme",[],[Return(Num(10.))])]]
   |> printf "%F"; 
   [%expect {| 10. |}]
+
 let%expect_test "eval fct outside of scope" = 
   evalExpr 
     (Fct ("callme", [])) 
@@ -274,7 +294,8 @@ let%expect_test "eval fct outside of scope" =
   |> printf "%F"; 
   [%expect {| 10. |}]
 
-(*Statement tests*)
+(*--- statement tests ---*)
+
 let%expect_test "eval var" = 
   let fnStored = evalStatement
     ([])
@@ -284,25 +305,36 @@ let%expect_test "eval var" =
   |> printf "%F"; 
   [%expect {| 10. |}]
 
-(* END EXPRESSION TESTS *)
-let a0: block = [
+(*--- block tests---*)
+
+(*
+ 
+   v = 1.0
+   v
+
+*)
+let p0: block = [
   Assign("v", Num(1.0));
   Expr(Var("v")) 
 ]
-
-let%expect_test "a0" =
-  evalCode a0 []; 
+let%expect_test "p0" =
+  evalCode p0 []; 
   [%expect {| 1. |}]
 
-let a1: block = [
+(*
+    v = 1.0
+    a = 2.0
+    v
+    a
+ *)
+let p1: block = [
   Assign("v", Num(1.0));
   Assign("a", Num(2.0));
   Expr(Var("v"));
   Expr(Var("a"))
 ]
-
-let%expect_test "a1" =
-  evalCode a1 []; 
+let%expect_test "p1" =
+  evalCode p1 []; 
   [%expect {| 
             1. 
             2.|}]
@@ -321,7 +353,7 @@ let p2: block = [
     Assign("v", Num(1.0));
     If(
       Op2(">", Var("v"), Num(10.0)), 
-        [Assign("v", Op2("+", Var("v"), Num(1.0)))], 
+        [Assign("v", Op2("+", Var("v"), Num(1.0)))],
         [For(
             Assign("i", Num(2.0)),
             Op2("<", Var("i"), Num(10.0)),
@@ -332,7 +364,6 @@ let p2: block = [
     );
     Expr(Var("v"))
 ]
-
 let%expect_test "p2" =
     evalCode p2 []; 
     [%expect {| 362880. |}]
@@ -367,8 +398,8 @@ let p3: block =
 let%expect_test "p3" =
   evalCode p3 [];
   [%expect {|
-  3.
-  8.
+    3.
+    8.
   |}]
 
 let p4: block =
@@ -378,7 +409,6 @@ let p4: block =
    ]);
    Expr(Op2("+", Fct("f", []), Fct("f", [])));
 ]
-
 let%expect_test "p4" =
   evalCode p4 [];
   [%expect {|
@@ -450,29 +480,12 @@ let%expect_test "p7" =
   evalCode p7 [];
   [%expect {|
   1.
-  |}]
+|}]
 
-let p8: block = [
-    FctDef("f", ["x"], [
-      If(
-        (*cond*) Op2("==", Var("x"), Num(10.0)), 
-        (*then*)[Return(Num(1.0))],
-        (*else*)[While(Op2(">", Num(2.0), Num(1.0)),
-          If(
-            Op2(">", Var("x"), Num(10.0)),
-            [Break;]
-          )
-          Assign("x", Op2("+", Var("x"), Num(1.0))),
-          If(
-            Op2("<=", Var("x"), Num(10.0)),
-            [Continue;]
-          )
-        )
-        ]
-      );
-      Expr(Var("x"))
-])
-      
+(* NESTED SPECIAL STATEMENTS TEST: 
+ * The following test will enter the for loop and 
+ * skip v = v * i until the loop ends, leaving v unchanged *)
+
 (*f(x):
 if x==10, return 1.0;
 else {
@@ -488,9 +501,33 @@ else {
   return x;
 } *)
 
+let p8: block = [
+    FctDef("f", ["x"], [
+      If(
+        (*cond*) Op2("==", Var("x"), Num(10.0)), 
+        (*then*)[Return(Num(1.0))],
+        (*else*)[While(Op2(">", Num(2.0), Num(1.0)),
+          [(If(
+            Op2(">", Var("x"), Num(10.0)),
+            [Break;],
+            []
+          ));
+          (Assign("x", Op2("+", Var("x"), Num(1.0))));
+          If(
+            Op2("<=", Var("x"), Num(10.0)),
+            [Continue;],
+            []
+          )]
+        )
+        ]
+      );
+      Return(Var "x");
+    ]);
+    Expr(Fct ("f", [Num 5.]))
+]
 
 let%expect_test "p8" =
-  evalCode p8 [5.0];
+  evalCode p8 [];
   [%expect {|
-  10.0
-  |}]
+  11.
+|}]
